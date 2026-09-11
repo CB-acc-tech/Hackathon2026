@@ -24,7 +24,8 @@ export const WellProvider = ({ children }) => {
     const [socket, setSocket] = useState(null);
 
     useEffect(() => {
-        const newSocket = io('http://localhost:5000', { autoConnect: true });
+        const socketUrl = import.meta.env.VITE_SOCKET_URL || '/';
+        const newSocket = io(socketUrl, { autoConnect: true, transports: ['polling', 'websocket'] });
         setSocket(newSocket);
 
         newSocket.on('telemetry:data', (dataPoint) => {
