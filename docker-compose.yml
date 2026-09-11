@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: rigmind_postgres
+    environment:
+      POSTGRES_DB: rigmind_db
+      POSTGRES_USER: rigmind_user
+      POSTGRES_PASSWORD: rigmind_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rigmind_user -d rigmind_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: rigmind_backend
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      DATABASE_URL: postgresql://rigmind_user:rigmind_password@postgres:5432/rigmind_db
+      JWT_SECRET: rigmind_super_secret_jwt_key_2026
+      AI_SERVICE_URL: http://ai-service:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ai-service:
+    build: ./ai-service
+    container_name: rigmind_ai_service
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CHROMA_PATH: ./data/chroma_db
+    volumes:
+      - ./ai-service/data:/app/data
+
+volumes:
+  pgdata:
