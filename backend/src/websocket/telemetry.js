@@ -3,6 +3,8 @@
 let activeSimulationInterval = null;
 let currentDepth = 2750.0;
 let isSimulating = false;
+let telemetryBuffer = [];
+let lastDraftedDepth = 0;
 
 // Generate realistic telemetry parameter set based on depth progression
 function generateTelemetryPoint(depth) {
@@ -59,6 +61,8 @@ function initTelemetrySocket(io) {
 
             isSimulating = true;
             currentDepth = 2750.0;
+            telemetryBuffer = [];
+            lastDraftedDepth = 0;
             io.emit('telemetry:status', { message: 'Simulation started', isSimulating: true });
 
             activeSimulationInterval = setInterval(() => {
@@ -68,6 +72,11 @@ function initTelemetrySocket(io) {
                 }
 
                 const dataPoint = generateTelemetryPoint(currentDepth);
+                telemetryBuffer.push(dataPoint);
+                if (telemetryBuffer.length > 50) {
+                    telemetryBuffer.shift();
+                }
+
                 io.emit('telemetry:data', dataPoint);
 
                 // Proactive local alert broadcast for dashboard UI
@@ -86,6 +95,38 @@ function initTelemetrySocket(io) {
                         ],
                         nearbyOffsetWell: 'WELL-005 (Offset Well NHK-112, 5.5 km away)'
                     });
+
+                    // Trigger AI Auto-Drafted DDR when anomaly reaches peak (~2840m+)
+                    if (dataPoint.depth >= 2840 && Math.abs(dataPoint.depth - lastDraftedDepth) > 50) {
+                        lastDraftedDepth = dataPoint.depth;
+                        const aiUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+                        fetch(`${aiUrl}/rag/generate-ddr`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                telemetryWindow: telemetryBuffer,
+                                wellId: 'WELL-007',
+                                wellName: 'Active Rig WELL-007'
+                            })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data && data.draftEvent) {
+                                const historicalRouter = require('../routes/historical');
+                                return historicalRouter.addHistoricalEvent(data.draftEvent);
+                            }
+                        })
+                        .then(savedEvent => {
+                            if (savedEvent) {
+                                console.log('⚡ AI Auto-Drafted DDR created:', savedEvent.id);
+                                io.emit('telemetry:ddr_drafted', {
+                                    message: `⚡ AI Auto-Drafted DDR report created for WELL-007 at ${dataPoint.depth}m. Pending Engineer Sign-off.`,
+                                    event: savedEvent
+                                });
+                            }
+                        })
+                        .catch(err => console.warn('Auto-DDR draft creation note:', err.message));
+                    }
                 }
             }, 2000);
         });

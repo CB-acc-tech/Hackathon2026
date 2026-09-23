@@ -280,9 +280,20 @@ export default function KnowledgeBasePage() {
                             <div key={ev.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-xs hover:border-blue-300 transition dark:bg-slate-900 dark:border-slate-800 dark:hover:border-slate-700">
                                 <div className="flex items-start justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
                                     <div>
-                                        <span className="bg-red-50 text-red-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-red-200 uppercase dark:bg-red-950 dark:text-red-300 dark:border-red-800">
-                                            {ev.eventType}
-                                        </span>
+                                        <div className="flex items-center space-x-2 mb-1">
+                                            <span className="bg-red-50 text-red-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-red-200 uppercase dark:bg-red-950 dark:text-red-300 dark:border-red-800">
+                                                {ev.eventType}
+                                            </span>
+                                            {ev.status === 'UNVERIFIED_DRAFT' ? (
+                                                <span className="bg-amber-100 text-amber-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800">
+                                                    🟡 UNVERIFIED DRAFT
+                                                </span>
+                                            ) : (
+                                                <span className="bg-emerald-100 text-emerald-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800">
+                                                    🟢 VERIFIED OFFICIAL
+                                                </span>
+                                            )}
+                                        </div>
                                         <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-1">{ev.wellName} ({ev.wellId})</h3>
                                         <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">Distance: {ev.distanceKm || '4.2'} km | Depth: {ev.eventDepth}m</p>
                                     </div>
@@ -318,7 +329,9 @@ export default function KnowledgeBasePage() {
                                         <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400" />
                                         <span>Report: {ev.sourceReport}</span>
                                     </span>
-                                    <span className="text-slate-400 dark:text-slate-500">Verified WCR Record</span>
+                                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                                        {ev.status === 'UNVERIFIED_DRAFT' ? 'Pending Admin Sign-Off' : `Verified by ${ev.verifiedBy || 'Data Admin'}`}
+                                    </span>
                                 </div>
                             </div>
                         ))}

@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional
 
 from app.geology.dip_correction import apply_stratigraphic_dip_correction
 from app.risk.engine import evaluate_drilling_risk
-from app.rag.pipeline import generate_rag_response
+from app.rag.pipeline import generate_rag_response, process_pdf_document, generate_ddr_draft, index_verified_event
 
 app = FastAPI(
     title="RigMind-NWIS AI Service",
@@ -46,6 +46,20 @@ class RAGQueryRequest(BaseModel):
     formation: Optional[str] = "Barail Main Formation"
     riskType: Optional[str] = "Stuck Pipe"
 
+class ProcessDocRequest(BaseModel):
+    filePath: str
+    wellId: Optional[str] = "WELL-001"
+    reportType: Optional[str] = "DDR"
+    fileName: Optional[str] = ""
+
+class DDRDraftRequest(BaseModel):
+    telemetryWindow: List[Dict[str, Any]]
+    wellId: Optional[str] = "WELL-007"
+    wellName: Optional[str] = "Active Rig WELL-007"
+
+class IndexVerifiedRequest(BaseModel):
+    eventData: Dict[str, Any]
+
 @app.get("/")
 def read_root():
     return {
@@ -57,7 +71,10 @@ def read_root():
             "health": "GET /health",
             "correct_depth": "POST /geology/correct-depth",
             "predict_risk": "POST /risk/predict",
-            "rag_query": "POST /rag/query"
+            "rag_query": "POST /rag/query",
+            "rag_process": "POST /rag/process",
+            "rag_generate_ddr": "POST /rag/generate-ddr",
+            "rag_index_verified": "POST /rag/index-verified"
         }
     }
 
@@ -66,7 +83,7 @@ def health_check():
     return {
         "status": "UP",
         "service": "RigMind-NWIS Python FastAPI AI Service",
-        "features": ["Prototype Stratigraphic Dip Correction", "Deterministic Risk Engine", "Historical RAG Pipeline"]
+        "features": ["Prototype Stratigraphic Dip Correction", "Deterministic Risk Engine", "Historical RAG Pipeline", "AI DDR Auto-Drafting & Human Sign-Off Verification"]
     }
 
 @app.post("/geology/correct-depth")
@@ -104,6 +121,41 @@ def rag_query(req: RAGQueryRequest):
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rag/process")
+def rag_process(req: ProcessDocRequest):
+    try:
+        res = process_pdf_document(
+            file_path=req.filePath,
+            well_id=req.wellId,
+            report_type=req.reportType,
+            file_name=req.fileName
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rag/generate-ddr")
+def generate_ddr(req: DDRDraftRequest):
+    try:
+        res = generate_ddr_draft(
+            telemetry_window=req.telemetryWindow,
+            well_id=req.wellId,
+            well_name=req.wellName
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rag/index-verified")
+def index_verified(req: IndexVerifiedRequest):
+    try:
+        res = index_verified_event(event_data=req.eventData)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 if __name__ == "__main__":
     import uvicorn

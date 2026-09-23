@@ -71,12 +71,21 @@ const STOP_WORDS = new Set(['in', 'on', 'at', 'the', 'a', 'an', 'and', 'or', 'of
 
 function extractTokens(str) {
     if (!str) return [];
-    return str
+    const rawTokens = str
         .toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ')
         .split(/\s+/)
         .filter(w => w.length > 1 && !STOP_WORDS.has(w));
+
+    const extra = [];
+    for (const t of rawTokens) {
+        if (/^\d+m$/.test(t)) {
+            extra.push(t.replace('m', ''));
+        }
+    }
+    return [...rawTokens, ...extra];
 }
+
 
 // GET /api/historical-events
 router.get('/historical-events', verifyToken, async (req, res) => {
@@ -113,6 +122,7 @@ router.get('/historical-events', verifyToken, async (req, res) => {
 router.get('/knowledge/search', verifyToken, async (req, res) => {
     const { query = '', hazardType = '', formation = '' } = req.query;
 
+    let dbEvents = [];
     try {
         let sql = `
             SELECT 
@@ -130,56 +140,38 @@ router.get('/knowledge/search', verifyToken, async (req, res) => {
                 he.source_report AS "sourceReport"
             FROM historical_events he
             JOIN well_master wm ON he.well_id = wm.well_id
+            ORDER BY he.event_depth ASC;
         `;
-
-        const conditions = [];
-        const queryParams = [];
-
-        if (hazardType) {
-            queryParams.push(`%${hazardType}%`);
-            conditions.push(`he.event_type ILIKE $${queryParams.length}`);
-        }
-
-        if (formation) {
-            queryParams.push(`%${formation}%`);
-            conditions.push(`he.formation ILIKE $${queryParams.length}`);
-        }
-
-        const tokens = extractTokens(query);
-        if (tokens.length > 0) {
-            const tokenConditions = tokens.map(token => {
-                queryParams.push(`%${token}%`);
-                const idx = queryParams.length;
-                return `(he.event_type ILIKE $${idx} OR he.formation ILIKE $${idx} OR he.cause ILIKE $${idx} OR he.mitigation ILIKE $${idx} OR he.description ILIKE $${idx} OR wm.well_name ILIKE $${idx})`;
-            });
-            conditions.push(`(${tokenConditions.join(' OR ')})`);
-        }
-
-        if (conditions.length > 0) {
-            sql += ' WHERE ' + conditions.join(' AND ');
-        }
-
-        sql += ' ORDER BY he.event_depth ASC;';
-
-        const result = await db.query(sql, queryParams);
+        const result = await db.query(sql);
         if (result.rows.length > 0) {
-            return res.json({ count: result.rows.length, results: result.rows });
+            dbEvents = result.rows;
         }
     } catch (err) {
-        console.warn('DB search error, utilizing smart token fallback search:', err.message);
+        console.warn('DB search fallback:', err.message);
     }
 
-    // Mock search with token matching & relevance scoring
+    // Combine in-memory events and DB events, deduplicating by sourceReport
+    const combinedEvents = [...MOCK_EVENTS];
+    const existingReports = new Set(MOCK_EVENTS.map(e => e.sourceReport));
+    
+    for (const dbe of dbEvents) {
+        if (!existingReports.has(dbe.sourceReport)) {
+            combinedEvents.push(dbe);
+            existingReports.add(dbe.sourceReport);
+        }
+    }
+
+    // Score all events with token matching
     const tokens = extractTokens(query);
 
-    let scored = MOCK_EVENTS.map(event => {
+    let scored = combinedEvents.map(event => {
         let score = 0;
-        const searchableText = `${event.eventType} ${event.formation} ${event.cause} ${event.mitigation} ${event.description} ${event.wellName}`.toLowerCase();
+        const searchableText = `${event.eventType} ${event.formation} ${event.cause} ${event.mitigation} ${event.description} ${event.outcome} ${event.sourceReport} ${event.wellName} ${event.wellId}`.toLowerCase();
 
         if (tokens.length > 0) {
             for (const token of tokens) {
                 if (searchableText.includes(token)) {
-                    score += 1;
+                    score += 5; // Strong weight to exact keyword matches like 2920m, wiper, trip
                 }
             }
         } else {
@@ -208,4 +200,126 @@ router.get('/knowledge/search', verifyToken, async (req, res) => {
     });
 });
 
+async function addHistoricalEvent(event) {
+    if (!event) return null;
+    const newId = MOCK_EVENTS.length + 1;
+    const eventObj = {
+        id: newId,
+        wellId: event.wellId || 'WELL-001',
+        wellName: event.wellName || `Offset Well ${event.wellId || 'WELL-001'}`,
+        distanceKm: event.distanceKm || 4.5,
+        eventType: event.eventType || 'Stuck Pipe',
+        eventDepth: parseFloat(event.eventDepth) || 2850.0,
+        formation: event.formation || 'Barail Main Formation',
+        cause: event.cause || 'Historical event extracted from uploaded report document.',
+        description: event.description || event.cause || 'Uploaded report incident description.',
+        mitigation: event.mitigation || 'Applied standard pipe freeing / LCM sweep protocol.',
+        outcome: event.outcome || 'Incident resolved and documented.',
+        nptHours: parseFloat(event.nptHours) || 24.0,
+        sourceReport: event.sourceReport || 'UPLOADED_REPORT.pdf',
+        status: event.status || 'VERIFIED_OFFICIAL',
+        verifiedBy: event.verifiedBy || (event.status === 'UNVERIFIED_DRAFT' ? null : 'Data Admin'),
+        verifiedAt: event.verifiedAt || (event.status === 'UNVERIFIED_DRAFT' ? null : new Date().toISOString())
+    };
+    
+    // Add to in-memory list first
+    MOCK_EVENTS.unshift(eventObj);
+
+    // Upsert into PostgreSQL DB
+    try {
+        await db.query(`
+            INSERT INTO well_master (well_id, well_name, latitude, longitude, field, status)
+            VALUES ($1, $2, 27.38, 95.32, 'Upper Assam Basin', 'HISTORICAL')
+            ON CONFLICT (well_id) DO NOTHING;
+        `, [eventObj.wellId, eventObj.wellName]);
+
+        await db.query(`
+            INSERT INTO historical_events (well_id, event_type, event_depth, formation, cause, description, mitigation, outcome, npt_hours, source_report)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `, [eventObj.wellId, eventObj.eventType, eventObj.eventDepth, eventObj.formation, eventObj.cause, eventObj.description, eventObj.mitigation, eventObj.outcome, eventObj.nptHours, eventObj.sourceReport]);
+    } catch (err) {
+        console.warn('DB historical_events insert fallback note:', err.message);
+    }
+
+    return eventObj;
+}
+
+// POST /api/historical-events/auto-draft
+router.post('/historical-events/auto-draft', verifyToken, async (req, res) => {
+    try {
+        const draftData = req.body;
+        draftData.status = 'UNVERIFIED_DRAFT';
+        const savedEvent = await addHistoricalEvent(draftData);
+        return res.json({
+            status: 'DRAFT_SAVED',
+            event: savedEvent
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/historical-events/:id/approve
+router.post('/historical-events/:id/approve', verifyToken, async (req, res) => {
+    try {
+        const eventId = parseInt(req.params.id, 10);
+        let event = MOCK_EVENTS.find(e => e.id === eventId);
+        if (!event && req.body && req.body.wellId) {
+            event = await addHistoricalEvent(req.body);
+        }
+        if (!event) {
+            event = {
+                id: eventId,
+                wellId: req.body.wellId || 'WELL-007',
+                wellName: req.body.wellName || 'Active Rig WELL-007',
+                eventType: req.body.eventType || 'Stuck Pipe Risk',
+                eventDepth: req.body.eventDepth || 2850.0,
+                formation: req.body.formation || 'Barail Main Formation',
+                cause: req.body.cause || 'Real-time telemetry anomaly.',
+                mitigation: req.body.mitigation || 'High-lubricity pill & downward jarring.',
+                outcome: req.body.outcome || 'String freed and hole conditioned.',
+                sourceReport: req.body.sourceReport || 'AUTO_DDR_WELL_007.pdf'
+            };
+            MOCK_EVENTS.unshift(event);
+        }
+
+        const approver = req.user ? (req.user.name || req.user.username || 'Data Admin') : 'Data Admin';
+        const nowIso = new Date().toISOString();
+
+        // Update fields
+        event.status = 'VERIFIED_OFFICIAL';
+        event.verifiedBy = approver;
+        event.verifiedAt = nowIso;
+        if (req.body.cause) event.cause = req.body.cause;
+        if (req.body.mitigation) event.mitigation = req.body.mitigation;
+        if (req.body.outcome) event.outcome = req.body.outcome;
+
+        // Forward to Python AI service to index in ChromaDB
+        const aiServiceUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+        try {
+            const response = await fetch(`${aiServiceUrl}/rag/index-verified`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ eventData: event })
+            });
+            const pyRes = await response.json();
+            console.log('Indexed verified event in ChromaDB:', pyRes.chunkId);
+        } catch (pyErr) {
+            console.warn('AI service indexing note:', pyErr.message);
+        }
+
+        return res.json({
+            status: 'APPROVED',
+            message: `Event #${eventId} verified and digitally signed by ${approver}`,
+            event
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+router.addHistoricalEvent = addHistoricalEvent;
+
 module.exports = router;
+
+

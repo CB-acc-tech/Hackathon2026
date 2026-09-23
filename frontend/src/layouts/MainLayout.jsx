@@ -25,7 +25,7 @@ export default function MainLayout() {
 
     const [darkMode, setDarkMode] = useState(() => {
         const saved = localStorage.getItem('rigmind_theme');
-        return saved !== null ? saved === 'dark' : true;
+        return saved !== null ? saved === 'dark' : false;
     });
 
     useEffect(() => {
